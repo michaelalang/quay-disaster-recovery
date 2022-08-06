@@ -144,4 +144,231 @@ run the playbook like
 
 ~~~
 $ ansible-playbook -e "QUAY_IO_USERNAME=myuser QUAY_IO_PASSWORD=mypassword" demo-dr.yml -i inventory-single-node 
+
+PLAY [Barman Postgresql recovery playbook] ****************************************************************************************************************************
+
+TASK [Gathering Facts] ************************************************************************************************************************************************
+ok: [node1.example.com]
+
+TASK [Login to default registry and create ${XDG_RUNTIME_DIR}/containers/auth.json] ***********************************************************************************
+changed: [node1.example.com]
+
+TASK [Pull container Images] ******************************************************************************************************************************************
+ok: [node1.example.com] => (item=quay.io/rhn_support_milang/barman:latest)
+
+TASK [Pull container Images] ******************************************************************************************************************************************
+ok: [node1.example.com] => (item=quay.io/rhn_support_milang/barman:latest)
+ok: [node1.example.com] => (item=docker.io/library/postgres:latest)
+
+TASK [Pull container Images] ******************************************************************************************************************************************
+ok: [node1.example.com] => (item=quay.io/quay/redis:latest)
+ok: [node1.example.com] => (item=quay.io/projectquay/quay:v3.7.3)
+
+TASK [Pull container Images] ******************************************************************************************************************************************
+ok: [node1.example.com] => (item=docker.io/minio/minio:latest)
+
+TASK [install required packages] **************************************************************************************************************************************
+ok: [node1.example.com] => (item=python3-psycopg2)
+
+TASK [Configure Firewall access] **************************************************************************************************************************************
+skipping: [node1.example.com] => (item=5432/tcp) 
+
+TASK [Configure Firewall access] **************************************************************************************************************************************
+skipping: [node1.example.com] => (item=9000/tcp) 
+skipping: [node1.example.com] => (item=9001/tcp) 
+
+TASK [Configure Firewall access] **************************************************************************************************************************************
+skipping: [node1.example.com] => (item=443/tcp) 
+
+TASK [Create container Volumes for persistent storage] ****************************************************************************************************************
+changed: [node1.example.com] => (item=quay-barman)
+
+TASK [Create container Volumes for persistent storage] ****************************************************************************************************************
+changed: [node1.example.com] => (item=quay-recoverydb)
+
+TASK [Create container Volumes for persistent storage] ****************************************************************************************************************
+changed: [node1.example.com] => (item=quay-primarydb)
+
+TASK [Create container Volumes for persistent storage] ****************************************************************************************************************
+changed: [node1.example.com] => (item=quay-quay)
+
+TASK [Create container Volumes for persistent storage] ****************************************************************************************************************
+changed: [node1.example.com] => (item=quay-minio)
+
+TASK [create primary Postgresql] **************************************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [create MinIO instances] *****************************************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [get mcli for configuration of MinIO] ****************************************************************************************************************************
+ok: [node1.example.com]
+
+TASK [configure mcli aliases] *****************************************************************************************************************************************
+changed: [node1.example.com] => (item={'name': 'minio1', 'uri': 'http://127.0.0.1:9000', 'access': 'minioadmin', 'secret': 'minioadmin'})
+changed: [node1.example.com] => (item={'name': 'minio2', 'uri': 'http://127.0.0.1:9000', 'access': 'minioadmin', 'secret': 'minioadmin'})
+
+TASK [configure MinIO Buckets] ****************************************************************************************************************************************
+changed: [node1.example.com] => (item=minio1)
+failed: [node1.example.com] (item=minio2) => {"ansible_loop_var": "item", "changed": true, "cmd": ["mcli", "mb", "minio2/quay"], "delta": "0:00:00.023467", "end": "2022-08-06 13:17:50.257789", "item": "minio2", "msg": "non-zero return code", "rc": 1, "start": "2022-08-06 13:17:50.234322", "stderr": "mcli: <ERROR> Unable to make bucket `minio2/quay`. Your previous request to create the named bucket succeeded and you already own it.", "stderr_lines": ["mcli: <ERROR> Unable to make bucket `minio2/quay`. Your previous request to create the named bucket succeeded and you already own it."], "stdout": "", "stdout_lines": []}
+...ignoring
+
+TASK [configure MinIO S3 user access] *********************************************************************************************************************************
+changed: [node1.example.com] => (item=minio1)
+changed: [node1.example.com] => (item=minio2)
+
+TASK [grant users access to MinIO] ************************************************************************************************************************************
+changed: [node1.example.com] => (item=minio1)
+changed: [node1.example.com] => (item=minio2)
+
+TASK [create database users] ******************************************************************************************************************************************
+changed: [node1.example.com] => (item={'name': 'barman', 'password': 'changeme', 'flags': 'CREATEDB,CREATEROLE,SUPERUSER,LOGIN,INHERIT,REPLICATION'})
+changed: [node1.example.com] => (item={'name': 'quay', 'password': 'changeme', 'flags': 'LOGIN'})
+
+TASK [create Postgresql databases] ************************************************************************************************************************************
+changed: [node1.example.com] => (item={'name': 'barman', 'owner': 'barman'})
+changed: [node1.example.com] => (item={'name': 'quay', 'owner': 'quay'})
+
+TASK [create database extension] **************************************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [get pg_hba.conf location] ***************************************************************************************************************************************
+ok: [node1.example.com]
+
+TASK [update connection permissions of primary Postgresql] ************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [reload pg_hba.conf] *********************************************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [create Quay instance] *******************************************************************************************************************************************
+
+TASK [quay : remove any existing Quay instance] ***********************************************************************************************************************
+ok: [node1.example.com]
+
+TASK [get quay config location] ***************************************************************************************************************************************
+ok: [node1.example.com]
+
+TASK [quay : create privatekey for selfsigned certificate] ************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [quay : create selfsigned certificate] ***************************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [quay : sign selfsigned certificate] *****************************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [quay : create Quay-Redis instance] ******************************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [quay : create Quay config] **************************************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [quay : update permissions for Quay config] **********************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [quay : create Quay instance] ************************************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [wait 10 seconds for quay to initialize] *************************************************************************************************************************
+Pausing for 10 seconds
+(ctrl+C then 'C' = continue early, ctrl+C then 'A' = abort)
+ok: [node1.example.com]
+
+TASK [get barman.conf location] ***************************************************************************************************************************************
+ok: [node1.example.com]
+
+TASK [configure barman instance] **************************************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [create Barman instances] ****************************************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [wait 10 seconds for barman to initialize] ***********************************************************************************************************************
+Pausing for 10 seconds
+(ctrl+C then 'C' = continue early, ctrl+C then 'A' = abort)
+ok: [node1.example.com]
+
+TASK [create admin quay user] *****************************************************************************************************************************************
+FAILED - RETRYING: create admin quay user (10 retries left).
+FAILED - RETRYING: create admin quay user (9 retries left).
+ok: [node1.example.com]
+
+TASK [Login to dr registry and create ${XDG_RUNTIME_DIR}/containers/auth.json] ****************************************************************************************
+changed: [node1.example.com]
+
+TASK [tag the barman image to localhost/barman:demo] ******************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [push the barman image to localhost/barman:demo] *****************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [create initial Barman backup] ***********************************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [get barman Backup ID] *******************************************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [change permissions on /restore] *********************************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [create restore from Barman] *************************************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [sync MinIO buckets] *********************************************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [stop primary instances] *****************************************************************************************************************************************
+changed: [node1.example.com] => (item=quay-primarydb)
+changed: [node1.example.com] => (item=quay-barman)
+changed: [node1.example.com] => (item=quay-redis)
+changed: [node1.example.com] => (item=quay-quay)
+
+TASK [create recovery Postgresql] *************************************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [create Quay instance] *******************************************************************************************************************************************
+
+TASK [quay : remove any existing Quay instance] ***********************************************************************************************************************
+ok: [node1.example.com]
+
+TASK [get quay config location] ***************************************************************************************************************************************
+ok: [node1.example.com]
+
+TASK [quay : create privatekey for selfsigned certificate] ************************************************************************************************************
+ok: [node1.example.com]
+
+TASK [quay : create selfsigned certificate] ***************************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [quay : sign selfsigned certificate] *****************************************************************************************************************************
+ok: [node1.example.com]
+
+TASK [quay : create Quay-Redis instance] ******************************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [quay : create Quay config] **************************************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [quay : update permissions for Quay config] **********************************************************************************************************************
+ok: [node1.example.com]
+
+TASK [quay : create Quay instance] ************************************************************************************************************************************
+changed: [node1.example.com]
+
+TASK [wait 10 seconds for quay to initialize] *************************************************************************************************************************
+Pausing for 10 seconds
+(ctrl+C then 'C' = continue early, ctrl+C then 'A' = abort)
+ok: [node1.example.com]
+
+TASK [Login to dr registry and create ${XDG_RUNTIME_DIR}/containers/auth.json] ****************************************************************************************
+FAILED - RETRYING: Login to dr registry and create ${XDG_RUNTIME_DIR}/containers/auth.json (6 retries left).
+FAILED - RETRYING: Login to dr registry and create ${XDG_RUNTIME_DIR}/containers/auth.json (5 retries left).
+changed: [node1.example.com]
+
+TASK [pull demo-barman image] *****************************************************************************************************************************************
+ok: [node1.example.com]
+
+PLAY RECAP ************************************************************************************************************************************************************
+node1.example.com            : ok=62   changed=41   unreachable=0    failed=0    skipped=3    rescued=0    ignored=1  
 ~~~
