@@ -1,0 +1,464 @@
+---
+- name: Barman Postgresql recovery playbook
+  hosts: all
+  become: true
+  vars:
+    - BARMAN_IMAGE: "quay.io/rhn_support_milang/barman:latest"
+    - POSTGRES_IMAGE: "docker.io/library/postgres:latest"
+    - REDIS_IMAGE: "quay.io/quay/redis:latest"
+    - MINIO_IMAGE: "docker.io/minio/minio:latest"
+    - QUAY_IMAGE: "quay.io/projectquay/quay:v3.7.3"
+    - QUAY_TITLE: "DR Quay instance"
+    - QUAY_SUPERUSER: "admin"
+    - QUAY_DATABASE_SECRET_KEY: "{{ 1000 | random | to_uuid }}"
+    - QUAY_SECRET_KEY: "{{ 1000 | random | to_uuid }}"
+    - QUAY_IO_USERNAME: ""
+    - QUAY_IO_PASSWORD: ""
+    - POSTGRES_HOST: "{{ ansible_facts['default_ipv4']['address'] }}"
+    - POSTGRES_USER: "admin"
+    - POSTGRES_PASSWORD: "changeme"
+    - POSTGRES_DBNAME: "quay"
+    - MINIO_S3_ACCESS: "quay"
+    - MINIO_S3_SECRET: "quayDrDemo"
+    - MINIO_S3_BUCKET: "quay"
+    - RECOVERY_NAME: "quay"
+    - BARMAN_PWD: "changeme"
+    - FIREWALL: false
+  tasks:
+    - name: "Login to default registry and create ${XDG_RUNTIME_DIR}/containers/auth.json"
+      containers.podman.podman_login:
+        username: "{{ QUAY_IO_USERNAME }}"
+        password: "{{ QUAY_IO_PASSWORD }}"
+        registry: quay.io
+
+    - name: "Pull container Images"
+      containers.podman.podman_image:
+        name: "{{ item }}"
+      with_items:
+        - "{{ BARMAN_IMAGE }}"
+      when: inventory_hostname in groups['barman']
+
+    - name: "Pull container Images"
+      containers.podman.podman_image:
+        name: "{{ item }}"
+      with_items:
+        - "{{ BARMAN_IMAGE }}"
+        - "{{ POSTGRES_IMAGE }}"
+      when: (inventory_hostname in groups['primarydb'] or
+             inventory_hostname in groups['recoverydb'])
+
+    - name: "Pull container Images"
+      containers.podman.podman_image:
+        name: "{{ item }}"
+      with_items:
+        - "{{ REDIS_IMAGE }}"
+        - "{{ QUAY_IMAGE }}"
+      when: inventory_hostname in groups['quay']
+
+    - name: "Pull container Images"
+      containers.podman.podman_image:
+        name: "{{ item }}"
+      with_items:
+        - "{{ MINIO_IMAGE }}"
+      when: inventory_hostname in groups['minio']
+
+    - name: "install required packages"
+      package:
+        name: "{{ item }}"
+      with_items:
+        - python3-psycopg2
+
+    - name: "Configure Firewall access"
+      ansible.builtin.firewalld:
+        permanent: yes
+        immediate: yes
+        state: enabled
+        port: "{{ item }}"
+      with_items:
+        - "5432/tcp"
+      when: (FIREWALL and 
+             (inventory_hostname in groups['primarydb'] or
+              inventory_hostname in groups['recoverydb']))
+
+    - name: "Configure Firewall access"
+      ansible.builtin.firewalld:
+        permanent: yes
+        immediate: yes
+        state: enabled
+        port: "{{ item }}"
+      with_items:
+        - "9000/tcp"
+        - "9001/tcp"
+      when: (FIREWALL and
+             inventory_hostname in groups['minio'])
+
+    - name: "Configure Firewall access"
+      ansible.builtin.firewalld:
+        permanent: yes
+        immediate: yes
+        state: enabled
+        port: "{{ item }}"
+      with_items:
+        - "443/tcp"
+      when: (FIREWALL and
+             inventory_hostname in groups['quay'])
+
+    - name: "Create container Volumes for persistent storage"
+      containers.podman.podman_volume:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - "{{ RECOVERY_NAME }}-barman"
+      when: inventory_hostname in groups['barman']
+
+    - name: "Create container Volumes for persistent storage"
+      containers.podman.podman_volume:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - "{{ RECOVERY_NAME }}-recoverydb"
+      when: inventory_hostname in groups['recoverydb']
+
+    - name: "Create container Volumes for persistent storage"
+      containers.podman.podman_volume:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - "{{ RECOVERY_NAME }}-primarydb"
+      when: inventory_hostname in groups['primarydb']
+
+    - name: "Create container Volumes for persistent storage"
+      containers.podman.podman_volume:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - "{{ RECOVERY_NAME }}-quay"
+      when: inventory_hostname in groups['quay']
+
+    - name: "Create container Volumes for persistent storage"
+      containers.podman.podman_volume:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - "{{ RECOVERY_NAME }}-minio"
+      when: inventory_hostname in groups['minio']
+
+    - name: "create primary Postgresql"
+      containers.podman.podman_container:
+        name: "{{ RECOVERY_NAME }}-primarydb"
+        image: "{{ POSTGRES_IMAGE }}"
+        state: started
+        recreate: true
+        rm: true
+        volumes:
+          - "{{ RECOVERY_NAME }}-primarydb:/var/lib/postgresql/data/"
+        publish:
+          - "5432:5432"
+        env:
+          POSTGRES_DB: "{{ POSTGRES_DBNAME }}"
+          POSTGRES_USER: "{{ POSTGRES_USER }}"
+          POSTGRES_PASSWORD: "{{ POSTGRES_PASSWORD }}"
+      when: inventory_hostname in groups['primarydb']
+
+    - name: "create MinIO instances"
+      containers.podman.podman_container:
+        name: "{{ RECOVERY_NAME }}-minio"
+        image: "{{ MINIO_IMAGE }}"
+        command: "server /data --console-address :9001"
+        state: started
+        volumes:
+          - "{{ RECOVERY_NAME }}-minio:/data"
+        publish:
+          - "9000:9000"
+          - "9001:9001"
+      when:  (inventory_hostname in groups['primarydb'] or
+              inventory_hostname in groups['recoverydb'])
+
+    - name: "get mcli for configuration of MinIO"
+      ansible.builtin.get_url:
+        url: https://dl.min.io/client/mc/release/linux-amd64/mc
+        dest: /usr/bin/mcli
+        mode: 0755
+      when: inventory_hostname in groups['barman']
+
+    - name: "configure mcli aliases"
+      tags:
+        - s3
+      ansible.builtin.command: "mcli alias set {{ item.name }} {{ item.uri }} {{ item.access }} {{ item.secret }}"
+      loop:
+        - { name: "minio1", uri: "http://{{ hostvars[groups['primarydb'][0]].ansible_facts['default_ipv4']['address'] }}:9000",
+            access: "minioadmin", secret: "minioadmin" }
+        - { name: "minio2", uri: "http://{{ hostvars[groups['recoverydb'][0]].ansible_facts['default_ipv4']['address'] }}:9000",
+            access: "minioadmin", secret: "minioadmin" }
+      when: inventory_hostname in groups['barman']
+
+    - name: "configure MinIO Buckets"
+      tags:
+        - s3
+      ansible.builtin.command: "mcli mb {{ item }}/{{ MINIO_S3_BUCKET }}"
+      with_items:
+        - "minio1"
+        - "minio2"
+      ignore_errors: true
+      when: inventory_hostname in groups['barman']
+
+    - name: "configure MinIO S3 user access"
+      tags:
+        - s3
+      ansible.builtin.command: "mcli admin user add {{ item }} {{ MINIO_S3_ACCESS }} {{ MINIO_S3_SECRET }}"
+      with_items:
+        - "minio1"
+        - "minio2"
+      ignore_errors: true
+      when: inventory_hostname in groups['barman']
+
+    - name: "grant users access to MinIO"
+      tags:
+        - s3
+      ansible.builtin.command: "mcli admin policy set {{ item }} readwrite user={{ MINIO_S3_ACCESS }}"
+      with_items:
+        - "minio1"
+        - "minio2"
+      ignore_errors: true
+      when: inventory_hostname in groups['barman']
+
+    - name: "create database users"
+      community.postgresql.postgresql_user:
+        name: "{{ item.name }}"
+        password: "{{ item.password }}"
+        role_attr_flags: "{{ item.flags }}"
+        login_host: "{{ POSTGRES_HOST }}"
+        login_user: "{{ POSTGRES_USER }}"
+        db: "postgres"
+        login_password: "{{ POSTGRES_PASSWORD }}"
+      loop:
+        - {name: "barman", password: "changeme", flags: "CREATEDB,CREATEROLE,SUPERUSER,LOGIN,INHERIT,REPLICATION"}
+        - {name: "quay", password: "changeme", flags: "LOGIN"}
+      when: inventory_hostname in groups['primarydb']
+
+    - name: "create Postgresql databases"
+      community.postgresql.postgresql_db:
+        name: "{{ item.name }}"
+        encoding: "UTF-8"
+        lc_collate: "en_US.utf8"
+        lc_ctype: "en_US.utf8"
+        state: present
+        conn_limit: "-1"
+        owner: "{{ item.owner }}"
+        login_host: "{{ POSTGRES_HOST }}"
+        login_user: "{{ POSTGRES_USER }}"
+        login_password: "{{ POSTGRES_PASSWORD }}"
+      loop:
+        - {name: "barman", owner: "barman" }
+        - {name: "quay", owner: "quay" }
+      when: inventory_hostname in groups['primarydb']
+
+    - name: "create database extension"
+      tags:
+        - dbext
+      ansible.builtin.command: "podman exec -ti {{ RECOVERY_NAME }}-primarydb runuser -u postgres -- /usr/bin/psql -U admin -d quay -c 'CREATE EXTENSION pg_trgm'"
+      when: inventory_hostname in groups['primarydb']
+      ignore_errors: true
+
+    - name: "get pg_hba.conf location"
+      containers.podman.podman_volume_info:
+        name: "{{ RECOVERY_NAME }}-primarydb"
+      register: PRIMARYDBPATH
+      when: inventory_hostname in groups['primarydb']
+    
+    - name: "update connection permissions of primary Postgresql"
+      ansible.builtin.lineinfile:
+        path: "{{ PRIMARYDBPATH.volumes[0].Mountpoint }}/pg_hba.conf"
+        state: present
+        line: host replication barman all trust
+      when: inventory_hostname in groups['primarydb']
+
+    - name: "reload pg_hba.conf" 
+      ansible.builtin.command: "podman exec -ti {{ RECOVERY_NAME }}-primarydb runuser -u postgres -- /usr/bin/psql -U admin -d template1 -c 'SELECT pg_reload_conf();'"
+      when: inventory_hostname in groups['primarydb']
+
+    - name: "create Quay instance"
+      ansible.builtin.include_role: 
+        name: quay
+      when: inventory_hostname in groups['primarydb']
+
+    - name: "get barman.conf location"
+      containers.podman.podman_volume_info:
+        name: "{{ RECOVERY_NAME }}-barman"
+      register: BARMANPATH
+      when: inventory_hostname in groups['barman']
+  
+    - name: "configure barman instance"
+      ansible.builtin.template:
+        src: "barman.conf.j2"
+        dest: "{{ BARMANPATH.volumes[0].Mountpoint }}/instance.conf"
+        mode: "0640"
+        owner: "999"
+        group: "998"
+        setype: container_file_t
+      when: inventory_hostname in groups['barman']
+
+    - name: "create Barman instances"
+      containers.podman.podman_container:
+        name: "{{ RECOVERY_NAME }}-barman"
+        image: "{{ BARMAN_IMAGE }}"
+        state: started
+        recreate: true
+        rm: true
+        env:
+          PGPASS: "*:*:*:barman:{{ BARMAN_PWD }}"
+        volumes:
+          - "{{ RECOVERY_NAME }}-barman:/etc/barman.d/"
+          - "{{ RECOVERY_NAME }}-recoverydb:/restore"
+      when: inventory_hostname in groups['barman']
+
+    - name: "wait 10 seconds for barman to initialize"
+      ansible.builtin.pause:
+        seconds: 10
+      when: inventory_hostname in groups['barman']
+
+    - name: "create admin quay user"
+      tags:
+        - quayadmin
+      ansible.builtin.uri:
+        url: "https://localhost/api/v1/user/initialize"
+        method: POST
+        headers:
+          Content-Type: "application/json"
+        body: '{ "username": "admin", "password":"changeme", "email": "admin@localhost", "access_token": true}'
+        validate_certs: false
+      register: QUAY_LOGIN        
+      until: QUAY_LOGIN.status == 200
+      retries: 10
+      delay: 5
+      when: inventory_hostname in groups['primarydb']
+
+    - name: "Login to dr registry and create ${XDG_RUNTIME_DIR}/containers/auth.json"
+      containers.podman.podman_login:
+        username: "admin"
+        password: "changeme"
+        tlsverify: false
+        registry: "{{ ansible_facts['fqdn'] }}"
+      when: inventory_hostname in groups['primarydb']
+
+    
+    - name: "tag the barman image to localhost/barman:demo"
+      containers.podman.podman_tag:
+        image: "{{ BARMAN_IMAGE }}"
+        target_names:
+          - "{{ ansible_facts['fqdn'] }}/admin/barman:demo"
+      when: inventory_hostname in groups['primarydb']
+
+    - name: "push the barman image to localhost/barman:demo"
+      tags:
+        - pushdemo
+      containers.podman.podman_image:
+        name: "barman:demo"
+        push: true
+        push_args:
+          dest: "{{ ansible_facts['fqdn'] }}/admin"
+        validate_certs: false
+      when: inventory_hostname in groups['primarydb']
+
+    - name: "create initial Barman backup"
+      tags:
+        - backup
+      ansible.builtin.command: "podman exec -ti {{ RECOVERY_NAME }}-barman barman backup {{ RECOVERY_NAME }} --wait"
+      until: INIT.rc == 0
+      retries: 6
+      delay: 10
+      register: INIT
+      when: inventory_hostname in groups['barman']
+
+    - name: "get barman Backup ID"
+      tags:
+        - recover
+      ansible.builtin.command: "podman exec -ti {{ RECOVERY_NAME }}-barman barman list-backups {{ RECOVERY_NAME }} --minimal"
+      register: RECOVERY_ID
+      when: inventory_hostname in groups['barman']
+
+    - name: "change permissions on /restore"
+      tags:
+        - recover
+      ansible.builtin.command: "podman exec -ti {{ RECOVERY_NAME }}-barman chown barman:barman -R /restore"
+      when: inventory_hostname in groups['barman']
+
+    - name: "create restore from Barman"
+      tags:
+        - recover
+      ansible.builtin.command: "podman exec -ti {{ RECOVERY_NAME }}-barman barman recover {{ RECOVERY_NAME }} {{ RECOVERY_ID.stdout }} /restore"
+      when: inventory_hostname in groups['barman']
+
+    - name: "sync MinIO buckets"
+      tags:
+        - recover
+      ansible.builtin.command: "mcli -q --no-color mirror minio1/{{ MINIO_S3_BUCKET }} minio2/{{ MINIO_S3_BUCKET }}"
+      ignore_errors: true
+      when: inventory_hostname in groups['barman']
+
+    - name: "stop primary instances"
+      tags:
+        - recover
+      containers.podman.podman_container:
+        name: "{{ item }}"
+        state: absent
+      with_items:
+        - "{{ RECOVERY_NAME }}-primarydb"
+        - "{{ RECOVERY_NAME }}-barman"
+        - "{{ RECOVERY_NAME }}-redis"
+        - "{{ RECOVERY_NAME }}-quay"
+      when: inventory_hostname in groups['primarydb']
+
+    - name: "create recovery Postgresql"
+      tags:
+        - drfailover
+      containers.podman.podman_container:
+        name: "{{ RECOVERY_NAME }}-recoverydb"
+        image: "{{ POSTGRES_IMAGE }}"
+        state: started
+        recreate: true
+        rm: true
+        volumes:
+          - "{{ RECOVERY_NAME }}-recoverydb:/var/lib/postgresql/data/"
+        publish:
+          - "5432:5432"
+        env:
+          POSTGRES_DB: "{{ POSTGRES_DBNAME }}"
+          POSTGRES_USER: "{{ POSTGRES_USER }}"
+          POSTGRES_PASSWORD: "{{ POSTGRES_PASSWORD }}"
+      when: inventory_hostname in groups['recoverydb']
+
+    - name: "create Quay instance"
+      tags:
+        - drfailover
+      ansible.builtin.include_role: 
+        name: quay
+      when: inventory_hostname in groups['recoverydb']
+
+    - name: "Login to dr registry and create ${XDG_RUNTIME_DIR}/containers/auth.json"
+      tags:
+        - drfailover
+        - drverify
+      containers.podman.podman_login:
+        username: "admin"
+        password: "changeme"
+        tlsverify: false
+        registry: "{{ ansible_facts['fqdn'] }}"
+      until: PULL.failed == false
+      retries: 6
+      delay: 10
+      register: PULL
+
+      when: inventory_hostname in groups['recoverydb']
+
+    - name: "pull demo-barman image"
+      tags:
+        - drverify
+      containers.podman.podman_image:
+        name: "{{ ansible_facts['fqdn'] }}/admin/barman:demo"
+        validate_certs: false
+      until: PULL.failed == false
+      retries: 6
+      delay: 10
+      register: PULL
+      when: inventory_hostname in groups['recoverydb']

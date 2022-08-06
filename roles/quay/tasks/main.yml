@@ -1,0 +1,86 @@
+- name: "remove any existing Quay instance"
+  tags:
+    - quay
+  containers.podman.podman_container:
+    name: "{{ RECOVERY_NAME }}-quay"
+    state: absent
+  ignore_errors: true
+
+- name: "get quay config location"
+  tags:
+    - quay
+  containers.podman.podman_volume_info:
+    name: "{{ RECOVERY_NAME }}-quay"
+  register: QUAYPATH
+
+- name: "create privatekey for selfsigned certificate"
+  tags:
+    - quay
+  community.crypto.openssl_privatekey:
+    path: "{{ QUAYPATH.volumes[0].Mountpoint }}/ssl.key"
+
+- name: "create selfsigned certificate"
+  tags:
+    - quay
+  community.crypto.openssl_csr_pipe:
+    privatekey_path: "{{ QUAYPATH.volumes[0].Mountpoint }}/ssl.key"
+    common_name: node2.example.com
+  register: csr
+
+- name: "sign selfsigned certificate"
+  tags:
+    - quay
+  community.crypto.x509_certificate:
+    path: "{{ QUAYPATH.volumes[0].Mountpoint }}/ssl.cert"
+    csr_content: "{{ csr.csr }}"
+    privatekey_path: "{{ QUAYPATH.volumes[0].Mountpoint }}/ssl.key"
+    provider: selfsigned
+
+- name: "create Quay-Redis instance"
+  tags:
+    - quay
+  containers.podman.podman_container:
+    name: "{{ RECOVERY_NAME }}-redis"
+    image: "{{ REDIS_IMAGE }}"
+    state: started
+    recreate: true
+    rm: true
+    publish:
+      - "6379:6379"
+
+- name: "create Quay config"
+  tags:
+    - quay
+  ansible.builtin.template:
+    src: "config.yaml.j2"
+    dest: "{{ QUAYPATH.volumes[0].Mountpoint }}/config.yaml"
+    setype: container_file_t
+
+- name: "update permissions for Quay config"
+  tags:
+    - quay
+  ansible.builtin.file:
+    path: "{{ QUAYPATH.volumes[0].Mountpoint }}"
+    state: directory
+    recurse: yes
+    owner: "1001"
+    group: "0"
+    setype: container_file_t
+
+- name: "create Quay instance"
+  tags:
+    - quay
+  containers.podman.podman_container:
+    name: "{{ RECOVERY_NAME }}-quay"
+    image: "{{ QUAY_IMAGE }}"
+    state: started
+    recreate: true
+    rm: true
+    volumes:
+      - "{{ RECOVERY_NAME }}-quay:/conf/stack"
+    publish:
+      - "443:8443"
+
+- name: "wait 10 seconds for quay to initialize"
+  ansible.builtin.pause:
+    seconds: 10

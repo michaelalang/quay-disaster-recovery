@@ -1,0 +1,22 @@
+barman:
+  hosts:
+    node2.example.com:
+
+primarydb:
+  hosts:
+    node1.example.com:
+
+recoverydb:
+  hosts:
+    node2.example.com:
+
+minio:
+  hosts:
+    node1.example.com:
+    node2.example.com:
+
+quay:
+  hosts:
+    node1.example.com:
+    node2.example.com:
+
