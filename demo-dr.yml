@@ -462,3 +462,63 @@
       delay: 10
       register: PULL
       when: inventory_hostname in groups['recoverydb']
+
+    - name: "cleanup containers"
+      tags:
+        - never
+        - cleanup
+      containers.podman.podman_container:
+        name: 
+        name: "{{ item }}"
+        state: absent
+      with_items:
+        - "{{ RECOVERY_NAME }}-primarydb"
+        - "{{ RECOVERY_NAME }}-recoverydb"
+        - "{{ RECOVERY_NAME }}-barman"
+        - "{{ RECOVERY_NAME }}-redis"
+        - "{{ RECOVERY_NAME }}-quay"
+        - "{{ RECOVERY_NAME }}-minio"
+      ignore_errors: true
+
+    - name: "cleanup images"
+      tags:
+        - never
+        - cleanup
+      containers.podman.podman_image:
+        name: "{{ item }}"
+        state: absent
+      with_items:
+        - "{{ BARMAN_IMAGE }}"
+        - "{{ POSTGRES_IMAGE }}"
+        - "{{ REDIS_IMAGE }}"
+        - "{{ MINIO_IMAGE }}"
+        - "{{ QUAY_IMAGE }}"
+        - "{{ ansible_facts['fqdn'] }}/admin/barman:demo"
+      ignore_errors: true
+
+    - name: "cleanup volumes"
+      tags:
+        - never
+        - cleanup
+      containers.podman.podman_volume:
+        name: "{{ item }}"
+        state: absent
+      with_items:
+        - "{{ RECOVERY_NAME }}-barman"
+        - "{{ RECOVERY_NAME }}-primarydb"
+        - "{{ RECOVERY_NAME }}-recoverydb"
+        - "{{ RECOVERY_NAME }}-quay"
+        - "{{ RECOVERY_NAME }}-minio"
+      ignore_errors: true
+
+    - name: "cleanup mcli"
+      tags:
+        - never
+        - cleanup
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      with_items:
+        - "/usr/bin/mcli"
+        - "~/.mcli"
+      ignore_errors: true
